@@ -22,8 +22,12 @@
 static const char *TAG = "ESP-SCOPE";
 
 // WiFi configuration from Kconfig
-#define ESP_WIFI_SSID "SSID"
-#define ESP_WIFI_PASS "PASSWORD"
+/* See untracked wifi-credentials.h */
+#ifndef ESP_WIFI_SSID
+#define ESP_WIFI_SSID CONFIG_ESP_WIFI_SSID
+#define ESP_WIFI_PASS CONFIG_ESP_WIFI_PASSWORD
+#endif
+
 #define ESP_MAXIMUM_RETRY 5
 
 /* FreeRTOS event group to signal when we are connected*/

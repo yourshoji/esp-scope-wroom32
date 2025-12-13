@@ -9,7 +9,6 @@
 #include "esp_wifi.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/event_groups.h"
-#include "freertos/ringbuf.h"
 #include "freertos/task.h"
 #include "nvs_flash.h"
 #include <inttypes.h>
@@ -49,21 +48,23 @@ static void start_webserver(void);
 
 // ADC Configuration
 #define ADC_UNIT ADC_UNIT_1
-#define _ADC_UNIT_STR(unit) #unit
-#define ADC_UNIT_STR(unit) _ADC_UNIT_STR(unit)
+#define ADC_UNIT ADC_UNIT_1
 #define ADC_CONV_MODE ADC_CONV_SINGLE_UNIT_1
 #define ADC_ATTEN ADC_ATTEN_DB_11
 #define ADC_BIT_WIDTH ADC_BITWIDTH_12
 
 #define ADC_OUTPUT_TYPE ADC_DIGI_OUTPUT_FORMAT_TYPE2
-#define ADC_GET_CHANNEL(p_data) ((p_data)->type2.channel)
 #define ADC_GET_DATA(p_data) ((p_data)->type2.data)
 
-#define ADC_READ_LEN 1024
+/*
+ * Web Server Configuration
+ */
+static httpd_handle_t s_server = NULL;
+
+#define ADC_READ_LEN 4096
 
 static adc_continuous_handle_t adc_handle = NULL;
-static TaskHandle_t s_task_handle;
-static RingbufHandle_t s_ringbuf_handle;
+
 
 // Single client support for simplicity, or use a list for multiple
 static int s_ws_client_fd = -1;
@@ -79,6 +80,7 @@ static uint16_t s_test_hz = 100;
 static void wifi_init_sta(void);
 static void continuous_adc_init(adc_channel_t *channel, uint8_t channel_num,
                                 adc_continuous_handle_t *out_handle);
+static esp_err_t ws_handler(httpd_req_t *req);
 
 /*
  * Task to read from ADC Continuous driver
@@ -89,7 +91,7 @@ static void adc_read_task(void *arg) {
   uint8_t result[ADC_READ_LEN] = {0};
   memset(result, 0xcc, ADC_READ_LEN);
 
-  s_task_handle = xTaskGetCurrentTaskHandle();
+
 
   // ADC Init (Moved from app_main)
   // TODO: Make this configurable or find a good default pin.
@@ -135,35 +137,54 @@ static void adc_read_task(void *arg) {
     ret = adc_continuous_read(adc_handle, result, ADC_READ_LEN, &ret_num, 0);
     if (ret == ESP_OK) {
       // ESP_LOGI(TAG, "ret is %x, ret_num is %"PRIu32" bytes", ret, ret_num);
-      for (int i = 0; i < ret_num; i += sizeof(adc_digi_output_data_t)) {
-        adc_digi_output_data_t *p = (adc_digi_output_data_t *)&result[i];
-        uint32_t chan_num = ADC_GET_CHANNEL(p);
-        uint32_t data = ADC_GET_DATA(p);
-        /* Check the channel number validation, the data is invalid if the
-         * channel num exceed the maximum channel */
-        if (chan_num < SOC_ADC_CHANNEL_NUM(ADC_UNIT)) {
-          // ESP_LOGI(TAG, "Unit: %s, Channel: %"PRIu32", Value: %"PRIu32,
-          // ADC_UNIT_STR(ADC_UNIT), chan_num, data);
-          // ADC_UNIT_STR(ADC_UNIT), chan_num, data);
-          // Send data to RingBuffer
-          // We send raw value or processed? Sending raw 12-bit value is
-          // smaller. Let's send the 32-bit `adc_digi_output_data_t` itself or
-          // just the value. Sending just value (uint16_t) saves space.
-          uint16_t val = (uint16_t)data;
-          xRingbufferSend(s_ringbuf_handle, &val, sizeof(val), 0);
 
-        } else {
-          ESP_LOGW(TAG, "Invalid data [%" PRIu32 "_%" PRIu32 "]", chan_num,
-                   data);
-        }
+
+      // OPTIMIZED BATCH SENDING
+      // We have `ret_num` bytes of data in `result`.
+      // It contains `adc_digi_output_data_t` structs (4 bytes each).
+      // We want to extract just the data (12-16 bits) to save bandwidth?
+      // The original code was: `uint16_t val = (uint16_t)data;` and sent that.
+      // So we have 1/2 the size.
+
+      if (s_ws_client_fd != -1) {
+
+          // Allocate a small temp buffer on stack or static to avoid malloc in loop
+          // ret_num is up to ADC_READ_LEN (1024). 1024 / 4 = 256 samples.
+          // 256 * 2 bytes = 512 bytes output. Stack safe.
+          uint16_t out_buf[ADC_READ_LEN / sizeof(adc_digi_output_data_t)];
+          int out_idx = 0;
+
+          for (int i = 0; i < ret_num; i += sizeof(adc_digi_output_data_t)) {
+              adc_digi_output_data_t *p = (adc_digi_output_data_t *)&result[i];
+               uint32_t val = ADC_GET_DATA(p);
+               out_buf[out_idx++] = (uint16_t)val;
+          }
+
+          if (out_idx > 0) {
+              httpd_ws_frame_t ws_frame = {
+                  .final = true,
+                  .fragmented = false,
+                  .type = HTTPD_WS_TYPE_BINARY,
+                  .payload = (uint8_t *)out_buf,
+                  .len = out_idx * sizeof(uint16_t)
+              };
+
+              // Non-blocking send (best effort)
+              esp_err_t ret_ws = httpd_ws_send_frame_async(s_server, s_ws_client_fd, &ws_frame);
+               if (ret_ws != ESP_OK) {
+                  ESP_LOGW(TAG, "dropped");
+                  // Failed to send, possibly socket busy or buffer full.
+                  // Just ignore for now to keep ADC running.
+                  // If it's a fatal socket error, we might want to invalidate fd,
+                  // but async send usually returns QUEUE_FULL etc. for temp errors.
+              }
+          }
       }
+
       /**
-       * Because printing is slow, potentially delay here or yield if we fill
-       * buffers too fast. But for continuous mode we usually just want to drain
-       * the buffer. For now, just a small yield to prevent watchdog if we spin
-       * tight.
+       * Yield check
        */
-      vTaskDelay(1);
+      taskYIELD(); /* Explicit yield to let WiFi stack run if needed, though send_async should handle it */
     } else if (ret == ESP_ERR_TIMEOUT) {
       // We try to read `ADC_READ_LEN` until API returns timeout, which means
       // there's no available data
@@ -175,7 +196,7 @@ static void adc_read_task(void *arg) {
 static void continuous_adc_init(adc_channel_t *channel, uint8_t channel_num,
                                 adc_continuous_handle_t *out_handle) {
   adc_continuous_handle_cfg_t adc_config = {
-      .max_store_buf_size = 1024,
+      .max_store_buf_size = 16384,
       .conv_frame_size = ADC_READ_LEN,
   };
   ESP_ERROR_CHECK(adc_continuous_new_handle(&adc_config, out_handle));
@@ -275,13 +296,8 @@ void app_main(void) {
 
   start_test_signal(100);
 
-  // Create RingBuffer (e.g. 8KB)
-  s_ringbuf_handle = xRingbufferCreate(8 * 1024, RINGBUF_TYPE_BYTEBUF);
-  if (s_ringbuf_handle == NULL) {
-    ESP_LOGE(TAG, "Failed to create ring buffer");
-  }
 
-  xTaskCreate(adc_read_task, "adc_read_task", 4096 + ADC_READ_LEN, NULL, 5, NULL);
+  xTaskCreate(adc_read_task, "adc_read_task", 8192 + ADC_READ_LEN, NULL, 5, NULL);
 
   // Wait for WiFi connection
   EventBits_t bits = xEventGroupWaitBits(s_wifi_event_group,
@@ -350,14 +366,12 @@ static void wifi_init_sta(void) {
   ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
   ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_config));
   ESP_ERROR_CHECK(esp_wifi_start());
+  ESP_ERROR_CHECK(esp_wifi_set_ps(WIFI_PS_NONE));
 
   ESP_LOGI(TAG, "wifi_init_sta finished.");
 }
 
-/*
- * Web Server Configuration
- */
-static httpd_handle_t s_server = NULL;
+
 
 /*
  * WebSocket Handler
@@ -463,48 +477,7 @@ static const httpd_uri_t uri_params = {.uri = "/params",
                                        .handler = params_handler,
                                        .user_ctx = NULL};
 
-/*
- * Task to pull from RingBuffer and send to WS
- */
-static void ws_sender_task(void *arg) {
-  size_t item_size;
 
-  while (1) {
-    // Receive item from ring buffer
-    // usage: void *xRingbufferReceive(RingbufHandle_t xRingbuffer, size_t
-    // *pxItemSize, TickType_t xTicksToWait); But we sent `val` using
-    // `xRingbufferSend`. RingBuffer bytebuf mode sends stream. We used
-    // send/recv. Wait, we used `xRingbufferSend`. In bytebuf mode, receive
-    // returns a pointer to the buffer.
-
-    uint16_t *data = (uint16_t *)xRingbufferReceive(
-        s_ringbuf_handle, &item_size, pdMS_TO_TICKS(10));
-
-    if (data != NULL) {
-      if (s_ws_client_fd != -1) {
-        // Create WebSocket frame for binary data
-        httpd_ws_frame_t ws_frame = {
-            .final = true,
-            .fragmented = false,
-            .type = HTTPD_WS_TYPE_BINARY,
-            .payload = (uint8_t *)data,
-            .len = item_size
-        };
-
-        // Send binary frame
-        esp_err_t ret = httpd_ws_send_frame_async(s_server, s_ws_client_fd, &ws_frame);
-        if (ret != ESP_OK) {
-            ESP_LOGW(TAG, "WS Send failed, invalidating FD");
-            s_ws_client_fd = -1;
-        }
-      }
-      vRingbufferReturnItem(s_ringbuf_handle, (void *)data);
-    } else {
-      // No data
-      vTaskDelay(pdMS_TO_TICKS(5));
-    }
-  }
-}
 
 /* Handler for serving index.html */
 static esp_err_t index_handler(httpd_req_t *req) {
@@ -546,8 +519,7 @@ static void start_webserver(void) {
     httpd_register_uri_handler(s_server, &uri_ws);
     httpd_register_uri_handler(s_server, &uri_params);
 
-    // Start sender task
-    xTaskCreate(ws_sender_task, "ws_sender", 4096, NULL, 5, NULL);
+
 
   } else {
     ESP_LOGI(TAG, "Error starting server!");

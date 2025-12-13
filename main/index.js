@@ -151,7 +151,7 @@ canvas.addEventListener('click', (event) => {
       time: timeOffset
     };
 
-    draw();
+    // draw(); // Removed: Animation loop handles this
   }
 });
 
@@ -194,13 +194,23 @@ function connect() {
       const arr = new Uint16Array(event.data);
       if (arr?.length) {
         processData(arr);
-        draw();
+        // draw(); // Removed: Drawing is now handled by animation loop
       }
     } catch (e) {
       console.error('Parse error:', e);
     }
   };
 }
+
+// Animation loop
+function animationLoop() {
+  if (!isFrozen) {
+    draw();
+  }
+  requestAnimationFrame(animationLoop);
+}
+// Start the loop
+requestAnimationFrame(animationLoop);
 
 function processData(/** @type Uint16Array */newData) {
   if (isFrozen) {
@@ -439,8 +449,8 @@ function loadStoredConfig() {
 document.getElementById('reconnectBtn').addEventListener('click', connect);
 document.querySelectorAll('#sampleRate, #bitWidth, #atten, #testHz, #triggerLevel').forEach(input => input.addEventListener('change', setParams));
 document.getElementById('resetBtn').addEventListener('click', () => {
-    localStorage.clear();
-    window.location.reload();
+  localStorage.clear();
+  window.location.reload();
 });
 setParams();
 connect();

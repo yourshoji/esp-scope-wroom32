@@ -82,6 +82,25 @@ static void continuous_adc_init(adc_channel_t *channel, uint8_t channel_num,
                                 adc_continuous_handle_t *out_handle);
 static esp_err_t ws_handler(httpd_req_t *req);
 
+// Forward declarations
+static void wifi_init_sta(void);
+static void continuous_adc_init(adc_channel_t *channel, uint8_t channel_num,
+                                adc_continuous_handle_t *out_handle);
+static esp_err_t ws_handler(httpd_req_t *req);
+
+// Helper to calculate optimal buffer size (approx 50ms latency, max 4096, aligned to 4)
+static uint32_t get_optimal_buffer_size(uint32_t sample_rate) {
+    uint32_t bytes_per_sec = sample_rate * sizeof(adc_digi_output_data_t);
+    uint32_t target_size = bytes_per_sec / 50; // 20ms (50Hz)
+
+    // Clamp to min/max
+    if (target_size < 128) target_size = 128;
+    if (target_size > ADC_READ_LEN) target_size = ADC_READ_LEN;
+
+    // Align to 4 bytes
+    return (target_size + 3) & ~3;
+}
+
 /*
  * Task to read from ADC Continuous driver
  */
@@ -134,7 +153,7 @@ static void adc_read_task(void *arg) {
       s_reconfig_needed = false;
     }
 
-    ret = adc_continuous_read(adc_handle, result, ADC_READ_LEN, &ret_num, 0);
+    ret = adc_continuous_read(adc_handle, result, get_optimal_buffer_size(s_sample_rate), &ret_num, 0);
     if (ret == ESP_OK) {
       // ESP_LOGI(TAG, "ret is %x, ret_num is %"PRIu32" bytes", ret, ret_num);
 
@@ -172,11 +191,12 @@ static void adc_read_task(void *arg) {
               // Non-blocking send (best effort)
               esp_err_t ret_ws = httpd_ws_send_frame_async(s_server, s_ws_client_fd, &ws_frame);
                if (ret_ws != ESP_OK) {
-                  ESP_LOGW(TAG, "dropped");
-                  // Failed to send, possibly socket busy or buffer full.
-                  // Just ignore for now to keep ADC running.
-                  // If it's a fatal socket error, we might want to invalidate fd,
-                  // but async send usually returns QUEUE_FULL etc. for temp errors.
+                  ESP_LOGW(TAG, "dropped: %s", esp_err_to_name(ret_ws));
+
+                  // Invalidate FD if it's no longer valid (client disconnected)
+                  if (ret_ws == ESP_ERR_INVALID_ARG || ret_ws == ESP_FAIL) {
+                      s_ws_client_fd = -1;
+                  }
               }
           }
       }
@@ -193,13 +213,23 @@ static void adc_read_task(void *arg) {
   }
 }
 
+
+
 static void continuous_adc_init(adc_channel_t *channel, uint8_t channel_num,
                                 adc_continuous_handle_t *out_handle) {
+
+  uint32_t frame_size = get_optimal_buffer_size(s_sample_rate);
+  ESP_LOGI(TAG, "Dynamic Buffer Size: %lu bytes", frame_size);
+
   adc_continuous_handle_cfg_t adc_config = {
       .max_store_buf_size = 16384,
-      .conv_frame_size = ADC_READ_LEN,
+      .conv_frame_size = frame_size,
   };
   ESP_ERROR_CHECK(adc_continuous_new_handle(&adc_config, out_handle));
+
+  // Update the global read length used by the task (hacky but simple for now)
+  // Ideally return it, but our init function signature is fixed.
+  // We can rely on get_optimal_buffer_size(s_sample_rate) being consistent.
 
   adc_continuous_config_t dig_cfg = {
       .sample_freq_hz = s_sample_rate,

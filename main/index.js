@@ -150,8 +150,6 @@ canvas.addEventListener('click', (event) => {
       voltage,
       time: timeOffset
     };
-
-    // draw(); // Removed: Animation loop handles this
   }
 });
 
@@ -411,21 +409,19 @@ function setParams() {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload)
-  })
-    .then(res => {
-      if (res.ok) {
-        resetLowRateState();
+  }).then(res => {
+    if (res.ok) {
+      resetLowRateState();
 
-        // Update active config
-        activeConfig = { ...payload, desiredRate, trigger: parseInt(triggerLevel.value) || 2048 };
+      // Update active config
+      activeConfig = { ...payload, desiredRate, trigger: parseInt(triggerLevel.value) || 2048 };
 
-        // Save to localStorage
-        localStorage.setItem('esp32_adc_config', JSON.stringify(activeConfig));
-      } else {
-        alert('Error updating configuration');
-      }
-    })
-    .catch(err => alert('Network error: ' + err));
+      // Save to localStorage
+      localStorage.setItem('esp32_adc_config', JSON.stringify(activeConfig));
+    } else {
+      alert('Error updating configuration');
+    }
+  }).catch(err => alert('Network error: ' + err));
 };
 
 // Load config from localStorage on startup
@@ -452,6 +448,6 @@ document.getElementById('resetBtn').addEventListener('click', () => {
   localStorage.clear();
   window.location.reload();
 });
+document.getElementById('powerOff').addEventListener('click', () => window.location.href = "/poweroff");
 setParams();
 connect();
-

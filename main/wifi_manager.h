@@ -13,4 +13,5 @@ void wifi_manager_register_uri(httpd_handle_t server);
 // Helper to erase NVS credentials (can be called by button handler)
 void wifi_manager_erase_config(void);
 
+bool is_connected(void);
 #endif // WIFI_MANAGER_H

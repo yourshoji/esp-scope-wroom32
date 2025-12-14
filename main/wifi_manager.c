@@ -22,7 +22,6 @@ static const char *TAG = "WIFI_MGR";
 // Event Group
 static EventGroupHandle_t s_wifi_event_group;
 #define WIFI_CONNECTED_BIT BIT0
-#define WIFI_FAIL_BIT      BIT1
 
 // Server Handle for registering handlers
 static httpd_handle_t s_server_handle = NULL;
@@ -43,6 +42,10 @@ static void wifi_init_station(const char* ssid, const char* pass);
 #define NVS_NAMESPACE "wifi_cfg"
 #define NVS_KEY_SSID "ssid"
 #define NVS_KEY_PASS "pass"
+
+bool is_connected(void) {
+    return xEventGroupWaitBits(s_wifi_event_group, WIFI_CONNECTED_BIT, pdFALSE, pdFALSE, 1) & WIFI_CONNECTED_BIT;
+}
 
 // WiFi Event Handler
 static void event_handler(void *arg, esp_event_base_t event_base,

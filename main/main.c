@@ -24,11 +24,6 @@
 // Tag for logging
 static const char* TAG = "ESP-SCOPE";
 
-#define ESP_MAXIMUM_RETRY 5
-
-/* FreeRTOS event group to signal when we are connected*/
-
-
 // Embedded index.html
 extern const uint8_t index_html_start[] asm("_binary_index_html_start");
 extern const uint8_t index_html_end[] asm("_binary_index_html_end");
@@ -284,29 +279,37 @@ static void show_status_led() {
   int64_t reset_pressed_time = 0;
   while (true) {
     int64_t now = esp_timer_get_time() / 1000;
-    #ifdef CONFIG_LED_BUILTIN
-    vTaskDelay(pdMS_TO_TICKS(is_ap ? 500 : 100));
-    gpio_set_level(CONFIG_LED_BUILTIN, 1);
-    vTaskDelay(pdMS_TO_TICKS(s_ws_client_fd == -1 ? 900 : 200));
-    gpio_set_level(CONFIG_LED_BUILTIN, 0);
-    #else
-    vTaskDelay(pdMS_TO_TICKS(1000));
-    #endif
-
-    // Check Reset Pin
-    #ifdef CONFIG_BSP_CONFIG_GPIO
-    if (!is_ap && gpio_get_level(CONFIG_BSP_CONFIG_GPIO) == 0) {
-        if (now - reset_pressed_time > 1000) {
-            ESP_LOGW(TAG, "Factory Reset Triggered via GPIO %d", CONFIG_BSP_CONFIG_GPIO);
-            wifi_manager_erase_config();
-            esp_restart();
-        } else {
-            reset_pressed_time = now;
-        }
+#ifdef CONFIG_LED_BUILTIN
+    if (is_ap) {
+      vTaskDelay(pdMS_TO_TICKS(500));
+      gpio_set_level(CONFIG_LED_BUILTIN, 1);
+      vTaskDelay(pdMS_TO_TICKS(500));
     } else {
-        reset_pressed_time = 0;
+      if (is_connected()) {
+        vTaskDelay(pdMS_TO_TICKS(100));
+        gpio_set_level(CONFIG_LED_BUILTIN, 1);
+      }
+      vTaskDelay(pdMS_TO_TICKS(s_ws_client_fd == -1 ? 900 : 200));
     }
-    #endif
+    gpio_set_level(CONFIG_LED_BUILTIN, 0);
+#else
+    vTaskDelay(pdMS_TO_TICKS(1000));
+#endif
+
+// Check Reset Pin
+#ifdef CONFIG_BSP_CONFIG_GPIO
+    if (!is_ap && gpio_get_level(CONFIG_BSP_CONFIG_GPIO) == 0) {
+      if (now - reset_pressed_time > 1000) {
+        ESP_LOGW(TAG, "Factory Reset Triggered via GPIO %d", CONFIG_BSP_CONFIG_GPIO);
+        wifi_manager_erase_config();
+        esp_restart();
+      } else {
+        reset_pressed_time = now;
+      }
+    } else {
+      reset_pressed_time = 0;
+    }
+#endif
   }
 }
 
@@ -483,14 +486,12 @@ static esp_err_t index_js_handler(httpd_req_t* req) {
 static const httpd_uri_t uri_index_js = {
     .uri = "/index.js", .method = HTTP_GET, .handler = index_js_handler, .user_ctx = NULL};
 
-static esp_err_t power_handler(httpd_req_t* req) {
-#ifdef CONFIG_LED_BUILTIN
-  gpio_set_level(CONFIG_LED_BUILTIN, 0);
-#endif
+static const char *bye = "<head></head><body style='font-family: -apple-system, BlinkMacSystemFont, &quot;Segoe UI&quot;, Roboto, Helvetica, Arial, sans-serif;\n  background: #1a1a1a;\n  color: #e0e0e0;'><h1>Bye!</h1>Press \"reset\" on your esp-scope to start it up again</body>";
 
+static esp_err_t power_handler(httpd_req_t* req) {
   httpd_resp_set_type(req, "text/html");
   httpd_resp_set_hdr(req, "Content-Type", "text/html; charset=utf-8");
-  httpd_resp_send(req, "<html><body><h1>Bye!</h1></body></html>", HTTPD_RESP_USE_STRLEN);
+  httpd_resp_send(req, bye, HTTPD_RESP_USE_STRLEN);
 
   // delay to ensure network is flushed
   vTaskDelay(pdMS_TO_TICKS(200));

@@ -331,20 +331,9 @@ void app_main(void) {
   gpio_set_level(CONFIG_LED_BUILTIN, 0);
 #endif
 
-  /* Board-specific WiFi init (if any) */
-  // Seeed XIAO ESP32C6: Configure GPIO 3 and GPIO 14 as outputs
-  gpio_config_t board_io_conf = {
-      .pin_bit_mask = (1ULL << 3) | (1ULL << 14),
-      .mode = GPIO_MODE_OUTPUT,
-      .pull_up_en = GPIO_PULLUP_DISABLE,
-      .pull_down_en = GPIO_PULLDOWN_DISABLE,
-      .intr_type = GPIO_INTR_DISABLE};
-  gpio_config(&board_io_conf);
-
-  // Set GPIO 3 and GPIO 14 to low
-  gpio_set_level(3, 0);
-  gpio_set_level(14, 0);
-  /* end board-specific WiFi init (if any) */
+#ifdef CONFIG_BOARD_SPECIFIC_INIT
+#include CONFIG_BOARD_SPECIFIC_INIT
+#endif
 
   is_ap = wifi_manager_init_wifi();
 
@@ -503,9 +492,9 @@ static esp_err_t power_handler(httpd_req_t* req) {
   httpd_resp_set_hdr(req, "Content-Type", "text/html; charset=utf-8");
   httpd_resp_send(req, "<html><body><h1>Bye!</h1></body></html>", HTTPD_RESP_USE_STRLEN);
 
+  // delay to ensure network is flushed
   vTaskDelay(pdMS_TO_TICKS(200));
 
-  esp_sleep_enable_timer_wakeup(30L * 24L * 60L * 60L * 1000000ULL);  // One month
   esp_deep_sleep_start();
   return ESP_OK;
 }

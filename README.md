@@ -60,7 +60,7 @@ If you have the esp-idf VSCode extension, just click on the flame to build, flas
    idf.py monitor
    ```
 
-### Accessing the Web Interface
+### Using the esp-scope
 
 If your DHCP server supports it (most seem to), the app sets its hostname and you can just navigate to http://esp-scope (you may have/need a default domain extension)
 
@@ -73,6 +73,12 @@ If your DHCP server supports it (most seem to), the app sets its hostname and yo
    - Reset the interface using the "Reset" button.
    - Re-configure the WiFi using the "WiFi" button.
    - Power off the device
+
+The LED indicates three conditions:
+* Continuously lit: waiting to attach to a wifi network or starting the wireless AP
+* Equal 1 second flash: in AP mode - connect to the "ESP-Scope" access point
+* Slow, brief flashes: connected to the WiFi SSID set in the web UI
+* Rapid, brief flashes: sending data to an active client
 
 ### Attaching hardware
 

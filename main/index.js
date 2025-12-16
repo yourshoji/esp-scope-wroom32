@@ -13,6 +13,8 @@ let activeConfig = {
 let lowRateState = {
   accMin: 4096,
   accMax: 0,
+  accSum: 0,
+  accCount: 0,
   progress: 0.0,
   targetCount: 1.0
 };
@@ -78,10 +80,10 @@ let viewTransform = {
 // Helper to get total time (width of buffer in ms)
 function getTotalTimeMs() {
   let msPerPoint;
-  // If we are in low-rate mode (peak detect), we emit 2 points (min/max)
+  // If we are in low-rate mode (peak detect), we emit 1 point (object)
   // for every 'targetCount' samples of the hardware rate (which is 1kHz).
   if (activeConfig.desiredRate < 1000) {
-    msPerPoint = lowRateState.targetCount / 2.0;
+    msPerPoint = lowRateState.targetCount;
   } else {
     // Normal mode: 1 point = 1 sample
     msPerPoint = 1000.0 / activeConfig.desiredRate;
@@ -160,6 +162,11 @@ canvas.addEventListener('wheel', function (e) {
   }
 
   viewTransform.scale = newScale;
+  if (newScale < 1.001) {
+    statusEl.textContent = 'Connected via WebSocket';
+  } else {
+    statusEl.textContent = 'Scaled to ' + newScale.toFixed(2) + 'x';
+  }
 
   draw();
   // Update info if frozen to show correct values under cursor
@@ -309,7 +316,7 @@ function processData(/** @type Uint16Array */newData) {
     pushToBuffer(newData);
   } else {
     // Accumulation mode (Peak Detect) with Fractional Resampling
-    let pointsToPush = new Uint16Array(newData.length * 2); // Worst case
+    let pointsToPush = [];
     let idx = 0;
 
     // We add 1.0 "samples worth" of progress for each input sample.
@@ -319,29 +326,37 @@ function processData(/** @type Uint16Array */newData) {
     for (const val of newData) {
       if (val < lowRateState.accMin) lowRateState.accMin = val;
       if (val > lowRateState.accMax) lowRateState.accMax = val;
+      lowRateState.accSum += val;
+      lowRateState.accCount++;
 
       lowRateState.progress += 1.0;
 
       if (lowRateState.progress >= lowRateState.targetCount) {
-        // Push min and max to draw a vertical line
-        pointsToPush[idx++] = lowRateState.accMin;
-        pointsToPush[idx++] = lowRateState.accMax;
+        // Push object with min/max/avg
+        const avg = lowRateState.accCount > 0 ? (lowRateState.accSum / lowRateState.accCount) : val;
+        pointsToPush.push({
+          min: lowRateState.accMin,
+          max: lowRateState.accMax,
+          avg: avg
+        });
 
-        // Reset Min/Max for next window
+        // Reset Min/Max/Sum for next window
         lowRateState.accMin = 4096;
         lowRateState.accMax = 0;
+        lowRateState.accSum = 0;
+        lowRateState.accCount = 0;
 
         // Subtract one full window's worth of progress
         lowRateState.progress -= lowRateState.targetCount;
       }
     }
-    if (idx > 0) {
-      pushToBuffer(pointsToPush.slice(0, idx));
+    if (pointsToPush.length > 0) {
+      pushToBuffer(pointsToPush);
     }
   }
 }
 
-function pushToBuffer(/** @type Uint16Array */ newItems) {
+function pushToBuffer(/** @type Array<number|object> */ newItems) {
   if (newItems.length >= countPoints) {
     dataBuffer = Array.from(newItems.slice(-countPoints));
   } else {
@@ -496,16 +511,25 @@ function draw() {
     drawIdx = 0;
   else {
     const triggerVal = (4096 - (parseInt(triggerLevel.value) || 2048));
+
+    // Helper to extract value for trigger (handles numbers and avg objects)
+    const getVal = (i) => {
+      const v = dataBuffer[i];
+      return (typeof v === 'object' && v !== null) ? v.avg : v;
+    };
+
     if (triggerLevel.invert) {
       while (drawIdx >= 0) {
-        if (dataBuffer[drawIdx] < triggerVal && dataBuffer[drawIdx + 1] > triggerVal) {
+        // Look for falling edge
+        if (getVal(drawIdx) < triggerVal && getVal(drawIdx + 1) > triggerVal) {
           break;
         }
         drawIdx -= 1;
       }
     } else {
       while (drawIdx >= 0) {
-        if (dataBuffer[drawIdx] > triggerVal && dataBuffer[drawIdx + 1] < triggerVal) {
+        // Look for rising edge
+        if (getVal(drawIdx) > triggerVal && getVal(drawIdx + 1) < triggerVal) {
           break;
         }
         drawIdx -= 1;
@@ -521,18 +545,50 @@ function draw() {
   // yp = h - (val / maxAdcVal * h)
   // sy = yp * scale + offsetY
 
+  // Pass 1: Draw Min/Max ranges for downsampled data
+  ctx.lineWidth = 1;
+  ctx.strokeStyle = '#2b7044'; // Dark green
   ctx.beginPath();
-  // Using loop for continuous line
-  // To avoid performance hit with huge offsets, we window the loop
   dataBuffer.slice(drawIdx).forEach((val, i) => {
-    // Original X pixel position (before zoom) was just 'i' (because buffer size ~ canvas width)
-    // Actually, update buffer size is 'countPoints'.
-    // Let's assume 'i' is the initial X coordinate.
-    const sx = i * viewTransform.scale + viewTransform.offsetX;
+    // Check if it's an object (downsampled)
+    if (typeof val === 'object' && val !== null) {
+      const sx = i * viewTransform.scale + viewTransform.offsetX;
+      const yMin = VoltsToY(YtoVolts(h - (val.min / maxAdcVal * h))); // Convert to Y pixels
+      // Note: simplified Y calculation:
+      const yTop = h - (val.max / maxAdcVal * h) * viewTransform.scale + viewTransform.offsetY;
+      // Wait, simple logic:
+      // val -> Y pixel:
+      // yp_raw = h - (raw / maxAdcVal * h)
+      // yp_screen = yp_raw * scale + offsetY
 
-    // Normalized y calculation from original draw
-    // val is 0..4096.
-    const yp = h - (val / maxAdcVal * h);
+      const rawYMin = h - (val.min / maxAdcVal * h);
+      const rawYMax = h - (val.max / maxAdcVal * h);
+
+      const screenYMin = rawYMin * viewTransform.scale + viewTransform.offsetY;
+      const screenYMax = rawYMax * viewTransform.scale + viewTransform.offsetY;
+
+      ctx.moveTo(sx, screenYMin);
+      ctx.lineTo(sx, screenYMax);
+    }
+  });
+  ctx.stroke();
+
+  // Pass 2: Draw Main Trace (Avg or raw value)
+  ctx.lineWidth = 2;
+  ctx.strokeStyle = '#4ade80'; // Bright green
+  ctx.beginPath();
+
+  dataBuffer.slice(drawIdx).forEach((val, i) => {
+    const sx = i * viewTransform.scale + viewTransform.offsetX;
+    let rawVal;
+
+    if (typeof val === 'object' && val !== null) {
+      rawVal = val.avg;
+    } else {
+      rawVal = val;
+    }
+
+    const yp = h - (rawVal / maxAdcVal * h);
     const sy = yp * viewTransform.scale + viewTransform.offsetY;
 
     if (i === 0) ctx.moveTo(sx, sy);
@@ -577,7 +633,8 @@ function setParams() {
     if (res.ok) {
       lowRateState.accMin = 4096;
       lowRateState.accMax = 0;
-      lowRateState.accMax = 0;
+      lowRateState.accSum = 0;
+      lowRateState.accCount = 0;
 
       // Update active config
       activeConfig = { ...payload, desiredRate, trigger: parseInt(triggerLevel.value) || 2048 };

@@ -2,7 +2,7 @@
 
 A stable port of [MatAtBread's ESP-Scope](https://github.com/MatAtBread/esp-scope) adapted for ESP32 WROOM-32D (Xtensa). Fixes crashes, memory overflows, and network instability that occur when running the original RISC-V code on classic WROOM boards.
 
-![ESP-Scope Interface](image.png)
+<img src="img/image.png" alt="ESP-Scope Interface" width="600">
 
 ## Key Changes
 
@@ -29,7 +29,7 @@ idf.py build flash monitor
 2. Navigate to **192.168.4.1** to access the scope
 
 **Optional:** Configure your own Wi-Fi network through the interface. The device will restart and the new IP will be shown in the serial monitor.
-![ESP-Scope CMD](cmd.png)
+![ESP-Scope CMD](img/cmd.png)
 
 ## Pinout
 
@@ -54,7 +54,7 @@ idf.py build flash monitor
 - **Do not reduce task stack below 6KB**
 - For ESP32-C3/C6/S3, use the original project for better performance
 
-![ESP-Scope GIF](gif.gif)
+![ESP-Scope_GIF](img/running.gif)
 
 ## Credits
 

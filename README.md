@@ -1,72 +1,64 @@
-# ESP-Scope (ESP32 WROOM-32D)
+# ESP-Scope (ESP32 WROOM-32D Port)
 
-A stable, plug-and-play port of [MatAtBread’s ESP-Scope](https://github.com/MatAtBread/esp-scope) for the **classic ESP32 (WROOM-32D)**.  
-Works on most 30/38-pin ESP32 dev boards without crashes, or Wi-Fi lockups.
+A stable port of [MatAtBread's ESP-Scope](https://github.com/MatAtBread/esp-scope) adapted for ESP32 WROOM-32D (Xtensa). Fixes crashes, memory overflows, and network instability that occur when running the original RISC-V code on classic WROOM boards.
 
-This fork adapts the original RISC-V (ESP32-C6) design to **Xtensa-based ESP32** hardware by rewriting core drivers and fixing memory and networking issues.
+![ESP-Scope Interface](image.png)
 
-![esp-scope](screenshot.png)
+## Key Changes
 
----
+**Hardware Adaptation**
+- Reconfigured ADC driver for Type 1 DMA (single-unit ADC requirement)
+- Set 20 kHz sampling rate for hardware stability
+- Moved 4KB telemetry buffers from stack to static RAM
+- Increased task stack to 6KB to prevent boot loops
 
-## Why This Port
-The original project is solid but hardware-specific. On WROOM boards it often crashes or hangs. This version focuses on **stability and universal compatibility**.
+**Network Fixes**
+- Enabled socket recycling with LRU purging to prevent server hangs
+- Relaxed WebSocket handshake for immediate streaming
+- Implemented frame skipping (every 2nd frame) for Wi-Fi stability
 
-### Key Changes
-- Type-1 DMA and ADC floor locked to **20 kHz** for WROOM limits
-- Stack increased to **6144 bytes**, large buffers moved to static RAM
-- WebSocket auto-connect on page load
-- `lru_purge` enabled to prevent server lockups on refresh
-- Frame skipping to keep Wi-Fi stable during streaming
+## Quick Start
 
----
-
-## Getting Started
-
-### Build & Flash
 ```bash
 idf.py set-target esp32
 idf.py fullclean
 idf.py build flash monitor
 ```
 
-### First Boot
-1. ESP32 creates an AP named **ESP-Scope**
-2. Connect and open `192.168.4.1`
-3. Enter Wi-Fi credentials
-4. Open `http://esp-scope.local` (or the IP shown in serial output)
+1. Connect to **ESP-Scope** Wi-Fi AP
+2. Navigate to **192.168.4.1** to access the scope
 
----
+**Optional:** Configure your own Wi-Fi network through the interface. The device will restart and the new IP will be shown in the serial monitor.
+![ESP-Scope CMD](cmd.png)
 
-## Pinout (WROOM)
+## Pinout
 
-| Function    | GPIO | Notes |
-|------------|------|-------|
-| Signal In  | 36 (VP) | Analog input, 0–3.3V max |
-| Test Out   | 18 | 100 Hz PWM (calibration) |
-| Status LED | 2 | Blinks during streaming |
-| Reset      | 0 | Hold 3s for factory reset |
-
----
+| Function | GPIO | Notes |
+|----------|------|-------|
+| Signal Input | 36 (VP) | Analog input displayed on scope (0-3.3V max) |
+| Test Signal | 18 | 100 Hz test waveform for calibration |
+| Status LED | 2 | Streaming indicator |
+| Factory Reset | 0 | Hold BOOT button 3s |
 
 ## Troubleshooting
-- **Black screen**: Not on the same 2.4 GHz Wi-Fi network
-- **White screen**: `idf.py fullclean` was skipped
-- **Stuttering**: Expected. Frames are skipped to protect Wi-Fi stability
 
----
+- **White screen:** Run `idf.py fullclean` and rebuild
+- **No waveform:** Verify 2.4 GHz network connection
+- **Stuttering:** Intentional frame skipping for stability
+- **Boot loops:** Check power supply (500mA minimum)
 
-## 3D Case
-Two-part enclosure with AA battery space.  
-Originally designed for XIAO, adaptable to ESP32 boards.  
-Designed in Fusion 360, printed on a Bambu Labs A1 Mini.
+## Important Notes
 
----
+- Sampling capped at 20 kHz (hardware limitation)
+- Frame rate is half of capture rate by design
+- **Do not reduce task stack below 6KB**
+- For ESP32-C3/C6/S3, use the original project for better performance
+
+![ESP-Scope GIF](gif.gif)
 
 ## Credits
-- **Original Project**: MatAtBread
-- **WROOM Port**: Stability fixes for classic ESP32 hardware
-- **License**: MIT
 
-Compatibility build.  
-It works now. Please don’t touch the stack size.
+**Original:** [MatAtBread](https://github.com/MatAtBread/esp-scope) – UI, architecture, and concept  
+**License:** MIT
+
+This is a hardware-specific adaptation for Xtensa-based ESP32 modules.

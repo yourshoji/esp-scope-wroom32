@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "sdkconfig.h" // configurations
 #include "cJSON.h"
 #include "driver/gpio.h"
 #include "driver/ledc.h"
@@ -40,6 +41,11 @@ static const char* TAG = "ESP-SCOPE";
 #define ADC_OUTPUT_TYPE         ADC_DIGI_OUTPUT_FORMAT_TYPE1
 #define ADC_GET_DATA(p_data)    ((p_data)->type1.data) 
 #define ADC_READ_LEN            4096
+
+// Board Specific Initialization (can be configured in the sdkconfig.defaults file)
+// #ifdef CONFIG_BOARD_SPECIFIC_INIT
+//     #include CONFIG_BOARD_SPECIFIC_INIT
+// #endif
 
 // Embedded files
 extern const uint8_t index_html_start[] asm("_binary_index_html_start");
@@ -268,7 +274,8 @@ void app_main(void) {
     enable_test_signal(s_test_hz);
     
     // Lower priority than WiFi so we don't starve the network
-    xTaskCreate(adc_task, "adc_reader", 4096, NULL, 2, NULL);
+    // !!! FIXED: Stack was 4096 (too small), changed to 6144 to stop crashes !!!
+    xTaskCreate(adc_task, "adc_reader", 6144, NULL, 2, NULL);
     
     start_webserver();
     
@@ -279,7 +286,12 @@ void app_main(void) {
 // --- WEB STUFF BELOW ---
 
 static esp_err_t ws_handler(httpd_req_t* req) {
-    if (req->method == HTTP_GET) return ESP_OK; // Handshake
+    // !!! FIXED: Auto-accept the browser. Waiting for "hello" causes black screens if JS fails.
+    if (req->method == HTTP_GET) {
+        ESP_LOGI(TAG, "Client connected");
+        client_fd = httpd_req_to_sockfd(req);
+        return ESP_OK; 
+    }
 
     httpd_ws_frame_t ws_pkt;
     memset(&ws_pkt, 0, sizeof(httpd_ws_frame_t));
@@ -293,11 +305,9 @@ static esp_err_t ws_handler(httpd_req_t* req) {
         ws_pkt.payload = buf;
         
         httpd_ws_recv_frame(req, &ws_pkt, ws_pkt.len);
-
-        if (ws_pkt.type == HTTPD_WS_TYPE_TEXT && strstr((char*)ws_pkt.payload, "hello")) {
-            ESP_LOGI(TAG, "Client connected");
-            client_fd = httpd_req_to_sockfd(req);
-        }
+        
+        // (Removed the strict "hello" check here, we already accepted above)
+        
         free(buf);
     }
     return ESP_OK;
@@ -348,6 +358,8 @@ static esp_err_t serve_js(httpd_req_t* req) {
 static void start_webserver(void) {
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.max_uri_handlers = 8;
+    // !!! FIXED: Added this to prevent "Socket Hung" errors on refresh !!!
+    config.lru_purge_enable = true;
     
     // Start server
     if (httpd_start(&s_server, &config) == ESP_OK) {

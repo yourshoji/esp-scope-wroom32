@@ -10,7 +10,8 @@
  * - Minimum hardware sampling rate: 20,000 Hz
  */
 
- static inline void board_specific_init(void)
-// No-op for WROOM-32D
+static inline void board_specific_init(void) {
+    // No-op for WROOM-32D
+}
 
 

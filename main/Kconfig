@@ -1,16 +1,16 @@
 menu "espScope Configuration"
     config LED_BUILTIN
         int "LED IO Pin"
-        default 15
+        default 2
         help
             LED IO pin
 
     config BSP_CONFIG_GPIO
         int "Factory Reset Pin (GPIO)"
-        default 9
+        default 0
         help
             GPIO pin number to hold low on boot to erase NVS (Factory Reset).
-            Default is 9 (BOOT button on Seeed XIAO ESP32C6).
+            Default is 0 (BOOT button on ESP32-WROOM-32D).
 
     config BOARD_SPECIFIC_INIT
         string "Name of file containing any board specfic initialisation"
